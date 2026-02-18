@@ -39,8 +39,9 @@ Control your AVE Dominaplus home automation system directly from Home Assistant!
 ### ✅ Individual Alarm Sensors
 - **Supported**: Discovered when the first event is triggered.
 - Synced with the **"Get individual antitheft sensors"** flag.
-- The system does not provides namens so they are auto-named. It is reccomended to set custom names as they are discovered.
-- Highly sensitive and fast to trigger. Use at yout own discretion!
+- The system does not provide names, so sensors are auto-named. It is recommended to set custom
+   names after discovery.
+- These sensors are sensitive and may trigger quickly; configure accordingly.
 
 ---
 
@@ -78,19 +79,21 @@ The integration tries its best to not override your custom names. But for better
 ## ⚠️ Known Issues
 
 ### Multiple Webservers for Different Plants
-- Currently, multiple webservers for different plants are **not supported** due to:
-  - Lack of a unique identifier (e.g., MAC address is not provided by the API).
-  - "Plant identifier" is not unique.
-  - "Plant code" requires AVE Cloud configuration (not used in this integration).
+- Currently, multiple webservers for different plants are **not supported**. Multiple controllers for the
+   same plant are supported, but separate plant setups may cause device ID clashes. Support for
+   multi-plant setups is being explored.
 
-You can still have multiple controllers for the **same plant**, so multiple configurations are still enabled but must be used on the same plant. Otherwise, the device ids will clash.
+### Individual sensor alarm states after power outage
+- After a webserver or alarm unit reboot, a brief arm/disarm cycle may be needed for sensors to
+   start reporting state updates. This behavior is due to the alarm system firmware, not the
+   integration.
 
 ---
 
 ## 🤝 Contributing
 
 Contributions are welcome! If you encounter issues or have feature requests, feel free to open an issue or submit a pull request on GitHub.
-
+You can join our [discord server](https://discord.gg/PQ52jwV6BX)
 ---
 
 ## 📜 License
