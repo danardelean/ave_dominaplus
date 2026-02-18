@@ -198,17 +198,32 @@ class AveWebServer:
         except Exception as e:  # noqa: BLE001
             _LOGGER.error("Error processing message", exc_info=e)
 
-    async def send_ws_command(self, command, parameters=None):
+    async def send_ws_command(self, command, parameters=None, records=None):
         """Send a command to the web server."""
         message = chr(0x02) + command
-        if parameters:
-            message += chr(0x1D) + chr(0x1D).join(parameters)
+        payload = ""
+        if parameters is not None:
+            payload += chr(0x1D)
+            if isinstance(parameters, (list, tuple)):
+                pieces = [str(item) for item in parameters]
+            else:
+                pieces = str(parameters).split(",")
+            payload += chr(0x1D).join(pieces)
+        if records is not None:
+            if not isinstance(records, (list, tuple)):
+                records = str(records).split(",")
+            for record in records:
+                payload += chr(0x1E)
+                pieces = str(record).split(",")
+                payload += chr(0x1D).join(pieces)
+        message += payload
         message += chr(0x03)
         crc = await self.build_crc(message)
         full_message = message + crc + chr(0x04)
         if self.ws_conn and not self.ws_conn.closed:
             await self.ws_conn.send_str(full_message)
-            # _LOGGER.debug("Sent command: %s", full_message)
+            #escaped_message = full_message.encode("unicode_escape").decode("ascii")
+            #_LOGGER.debug("Sent command: %s", escaped_message)
         else:
             _LOGGER.error("WebSocket is not connected")
 
