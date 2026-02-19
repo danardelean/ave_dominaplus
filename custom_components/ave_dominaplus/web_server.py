@@ -217,7 +217,11 @@ class AveWebServer:
                 records = str(records).split(",")
             for record in records:
                 payload += chr(0x1E)
-                pieces = str(record).split(",")
+                if isinstance(record, (list, tuple)):
+                    record_string = ",".join(str(item) for item in record)
+                else:
+                    record_string = str(record)
+                pieces = record_string.split(",")
                 payload += chr(0x1D).join(pieces)
         message += payload
         message += chr(0x03)
@@ -225,8 +229,10 @@ class AveWebServer:
         full_message = message + crc + chr(0x04)
         if self.ws_conn and not self.ws_conn.closed:
             await self.ws_conn.send_str(full_message)
-            # escaped_message = full_message.encode("unicode_escape").decode("ascii")
-            # _LOGGER.debug("Sent command: %s", escaped_message)
+            escaped_message = (
+                full_message.encode("unicode_escape").decode("ascii")
+            )
+            _LOGGER.debug("Sent command: %s", escaped_message)
         else:
             _LOGGER.error("WebSocket is not connected")
 
