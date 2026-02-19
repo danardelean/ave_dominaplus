@@ -1,5 +1,7 @@
-class AveMapCommand:
+from homeassistant.backup_restore import _LOGGER
 
+
+class AveMapCommand:
     def __init__(self):
         self.command_id: int = -1
         self.command_name: str = ""
@@ -27,27 +29,33 @@ class AveMapCommand:
     @classmethod
     def FromWsRecord(cls, record: list[str]):
         instance = cls()
-        instance.command_id = int(cls._readRecordValue(record, 0))
-        instance.command_name = cls._readRecordValue(record, 1)
-        instance.command_type = int(cls._readRecordValue(record, 2))
-        instance.command_X = int(cls._readRecordValue(record, 3))
-        instance.command_Y = int(cls._readRecordValue(record, 4))
-        instance.icod = cls._readRecordValue(record, 5)
-        instance.ico1 = cls._readRecordValue(record, 6)
-        instance.ico2 = cls._readRecordValue(record, 7)
-        instance.ico3 = cls._readRecordValue(record, 8)
-        instance.ico4 = cls._readRecordValue(record, 9)
-        instance.ico5 = cls._readRecordValue(record, 10)
-        instance.ico6 = cls._readRecordValue(record, 11)
-        instance.ico7 = cls._readRecordValue(record, 12)
-        instance.icoc = cls._readRecordValue(record, 13)
-        instance.device_id = int(cls._readRecordValue(record, 14))
-        instance.device_family = int(cls._readRecordValue(record, 15))
+        try:
+            instance.command_id = int(cls._readRecordValue(record, 0))
+            instance.command_name = cls._readRecordValue(record, 1)
+            instance.command_type = int(cls._readRecordValue(record, 2))
+            instance.command_X = int(cls._readRecordValue(record, 3))
+            instance.command_Y = int(cls._readRecordValue(record, 4))
+            instance.icod = cls._readRecordValue(record, 5)
+            instance.ico1 = cls._readRecordValue(record, 6)
+            instance.ico2 = cls._readRecordValue(record, 7)
+            instance.ico3 = cls._readRecordValue(record, 8)
+            instance.ico4 = cls._readRecordValue(record, 9)
+            instance.ico5 = cls._readRecordValue(record, 10)
+            instance.ico6 = cls._readRecordValue(record, 11)
+            instance.ico7 = cls._readRecordValue(record, 12)
+            instance.icoc = cls._readRecordValue(record, 13)
+            instance.device_id = (
+                int(cls._readRecordValue(record, 14))
+                if cls._readRecordValue(record, 14).isdigit()
+                else -1
+            )
+            instance.device_family = int(cls._readRecordValue(record, 15))
+        except (ValueError, IndexError) as e:
+            _LOGGER.error("Error parsing command record: %s", str(e))
         return instance
 
 
 class AveArea:
-
     def __init__(self, id: int, name: str, order: int):
         self.id: int = id
         self.name: str = name
@@ -57,7 +65,6 @@ class AveArea:
 
 
 class AveMap:
-
     def __init__(self):
         self.areas_loaded: bool = False
         self.command_loaded: bool = False
@@ -95,10 +102,23 @@ class AveMap:
     ) -> AveMapCommand | None:
         for area in self.areas.values():
             for command in area.commands:
-                if (
-                    command.command_id == command_id
-                    and command.device_family == family
-                ):
+                if command.command_id == command_id and command.device_family == family:
+                    return command
+        return None
+
+    def GetCommandByDeviceId(self, device_id: int) -> AveMapCommand | None:
+        for area in self.areas.values():
+            for command in area.commands:
+                if command.device_id == device_id:
+                    return command
+        return None
+
+    def GetCommandByDeviceIdAndFamily(
+        self, device_id: int, family: int
+    ) -> AveMapCommand | None:
+        for area in self.areas.values():
+            for command in area.commands:
+                if command.device_id == device_id and command.device_family == family:
                     return command
         return None
 

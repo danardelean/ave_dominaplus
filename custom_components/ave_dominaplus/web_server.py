@@ -78,6 +78,9 @@ class AveWebServer:
         self.async_add_th_entities: Any = None
         self.update_thermostat: Any = None
         self.ave_map: AveMap = AveMap()
+        self._thermostat_lm_done = asyncio.Event()
+        self._thermostat_lmc_done = asyncio.Event()
+        self._thermostat_fetch_task: asyncio.Task | None = None
 
     async def set_update_binary_sensor(self, func) -> None:
         """Set the set_update_binary_sensor method for binary sensors."""
@@ -129,6 +132,9 @@ class AveWebServer:
     async def disconnect(self) -> None:
         """Disconnect from the web server."""
         self.closed = True
+        if self._thermostat_fetch_task and not self._thermostat_fetch_task.done():
+            self._thermostat_fetch_task.cancel()
+            self._thermostat_fetch_task = None
         if self.ws_conn:
             await self.ws_conn.close()
             self.ws_conn = None
@@ -172,6 +178,7 @@ class AveWebServer:
 
     async def on_connect_actions(self):
         """Actions to perform after connecting to the web server."""
+
         if self.ws_conn is None or self.ws_conn.closed:
             return
         await self.send_ws_command("LDI")  # Get device list
@@ -186,63 +193,54 @@ class AveWebServer:
             await self.send_ws_command("WSF", "12")
 
         if self.settings.fetch_thermostats:
-            await self._termostats_fetch_flow()
+            await self._start_thermostats_fetch_flow()
 
         await self.send_ws_command("SU3")  # Start streaming updates (most of them)
         # await self.send_ws_command("SU2") # Starts streaming some other updates (UPD for TLO and XU , NET and CLD messages)
 
+    async def _start_thermostats_fetch_flow(self) -> None:
+        """Start thermostat bootstrap flow without blocking message handling."""
+        self.ave_map = AveMap()
+        self._thermostat_lm_done.clear()
+        self._thermostat_lmc_done.clear()
+
+        if self._thermostat_fetch_task and not self._thermostat_fetch_task.done():
+            self._thermostat_fetch_task.cancel()
+
+        await self.send_ws_command("LM")
+        self._thermostat_fetch_task = asyncio.create_task(self._termostats_fetch_flow())
+
     async def _termostats_fetch_flow(self):
-        # 1) ask for map data
-        await self.send_ws_command("LM")  # Asks for map data
-
-        # 2) wait until all LM responses are received and the map is loaded
+        # 1) wait until LM responses are received and the map is loaded
         try:
-            await asyncio.wait_for(self._wait_for_map_loaded(), 15.0)
-        except asyncio.TimeoutError:
-            _LOGGER.warning("Timed out waiting for LM responses; proceeding")
+            await asyncio.wait_for(self._thermostat_lm_done.wait(), 15.0)
+        except TimeoutError:
+            _LOGGER.warning(
+                "Timed out waiting for LM responses; skipping thermostat map"
+            )
+            return
 
-        # 3) send LMC for each area (synchronously) once area_loaded==True
+        # 2) send LMC for each area once the LM map is loaded
         if self.ave_map.areas_loaded and self.ws_conn and not self.ws_conn.closed:
-            for map_id in self.ave_map.areas.keys():
+            if not self.ave_map.areas:
+                _LOGGER.debug("LM map returned no areas")
+                return
+            for map_id in self.ave_map.areas:
                 await self.send_ws_command("LMC", map_id)
         else:
             _LOGGER.debug("Map not loaded or ws disconnected; skipping LMC send")
+            return
 
-        # 4) wait for all LMC responses (commands loaded)
+        # 3) wait for all LMC responses (commands loaded)
         try:
-            await asyncio.wait_for(self._wait_for_commands_loaded(), 15.0)
-        except asyncio.TimeoutError:
+            await asyncio.wait_for(self._thermostat_lmc_done.wait(), 15.0)
+        except TimeoutError:
             _LOGGER.warning("Timed out waiting for LMC responses; proceeding")
 
+        # 4) request thermostat status snapshots
         commands: list[AveMapCommand] = self.ave_map.GetCommandsByFamily(4)
         for thermostatCommand in commands:
             await self.send_ws_command("WTS", [int(thermostatCommand.device_id)])
-
-    async def _wait_for_map_loaded(self) -> bool:
-        """Return True when ave_map.area_loaded becomes True."""
-        while not self.ave_map.areas_loaded:
-            if (
-                self.closed
-                or not self._connected
-                or self.ws_conn is None
-                or self.ws_conn.closed
-            ):
-                return False
-            await asyncio.sleep(0.05)
-        return True
-
-    async def _wait_for_commands_loaded(self) -> bool:
-        """Return True when ave_map.command_loaded becomes True."""
-        while not self.ave_map.command_loaded:
-            if (
-                self.closed
-                or not self._connected
-                or self.ws_conn is None
-                or self.ws_conn.closed
-            ):
-                return False
-            await asyncio.sleep(0.05)
-        return True
 
     def value_to_hex(self, value):
         """Return the hexadecimal value of a number."""
@@ -491,15 +489,19 @@ class AveWebServer:
         )
         self.ave_map.LoadAreasFromWsRecords(records)
         self.ave_map.areas_loaded = True
+        self._thermostat_lm_done.set()
 
     def manage_lmc(self, parameters, records):
         """Manage LMC List Map Commands commands received from the web server."""
         _LOGGER.debug(
-            "Parsing LMC (List Map Commands) command",
-            extra={"parameters": parameters, "records": records},
+            "Parsing LMC (List Map Commands) command, parameters: %s | records: %s",
+            parameters,
+            records,
         )
         area_id = int(parameters[0])
         self.ave_map.LoadAreaCommands(area_id, records)
+        if self.ave_map.command_loaded:
+            self._thermostat_lmc_done.set()
 
     def manage_wts(self, parameters, records):
         """Manage WTS command responses received from the web server."""
@@ -508,8 +510,16 @@ class AveWebServer:
             extra={"parameters": parameters, "records": records},
         )
         device_id = int(parameters[0])
-        thermostat = AveThermostatProperties.from_wts(parameters, records)
-        self.thermostats[device_id] = thermostat
+        thermostatProperties = AveThermostatProperties.from_wts(parameters, records)
+        thermostatProperties.device_name = (
+            f"thermostat_{thermostatProperties.device_name}"
+        )
+        if self.settings.get_entity_names:
+            command = self.ave_map.GetCommandByDeviceIdAndFamily(device_id, 4)
+            if command and command.command_name:
+                thermostatProperties.device_name = command.command_name
+
+        self.update_thermostat(self, 4, device_id, thermostatProperties)
 
     async def switch_turn_on(self, device_id: int):
         """Turn on the switch."""
