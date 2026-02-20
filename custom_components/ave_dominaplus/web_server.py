@@ -1,13 +1,19 @@
 """WebSocket connection to the AVE web server."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from types import MappingProxyType
 from typing import Any
+import xml.etree.ElementTree as ET
 
 import aiohttp
 
 from homeassistant.core import HomeAssistant
+
+from .ave_map import AveMap, AveMapCommand
+from .ave_thermostat import AveThermostatProperties
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,6 +27,7 @@ class AveWebServerSettings:
     fetch_sensors: bool
     fetch_lights: bool
     fetch_scenarios: bool
+    fetch_thermostats: bool
 
     def __init__(self) -> None:
         """Initialize the settings."""
@@ -30,6 +37,7 @@ class AveWebServerSettings:
         self.fetch_sensors = False
         self.fetch_lights = False
         self.fetch_scenarios = False
+        self.fetch_thermostats = False
 
 
 class AveWebServer:
@@ -49,13 +57,15 @@ class AveWebServer:
             self.settings.fetch_sensor_areas = settings_data["fetch_sensor_areas"]
             self.settings.fetch_sensors = settings_data["fetch_sensors"]
             self.settings.fetch_lights = settings_data["fetch_lights"]
+            self.settings.fetch_thermostats = settings_data["fetch_thermostats"]
         except KeyError as e:
             _LOGGER.error("Missing key in settings data: %s", e)
+        self.mac_address = ""
         self.hass = hass
         self.ws_conn: Any = None
         self._connected = False
         self.device_list: list[Any] = []
-        self.wstask: asyncio.Task
+        self.wtstask: asyncio.Task
         self.started = False
         self.closed = False
         self.binary_sensors: dict = {}  # Track binary sensors by unique ID
@@ -64,6 +74,16 @@ class AveWebServer:
         self.switches: dict = {}  # Track switches by unique ID
         self.async_add_sw_entities: Any = None
         self.update_switch: Any = None
+        self.thermostats: dict[Any] = {}  # Track thermostats by ID
+        self.async_add_th_entities: Any = None
+        self.update_thermostat: Any = None
+        self.ave_map: AveMap = AveMap()
+        self._thermostat_lm_done = asyncio.Event()
+        self._thermostat_lmc_done = asyncio.Event()
+        self._thermostat_fetch_task: asyncio.Task | None = None
+        self.numbers: dict = {}  # Track number entities by unique ID
+        self.async_add_number_entities: Any = None
+        self.update_th_offset: Any = None
 
     async def set_update_binary_sensor(self, func) -> None:
         """Set the set_update_binary_sensor method for binary sensors."""
@@ -72,6 +92,10 @@ class AveWebServer:
     async def set_update_switch(self, func) -> None:
         """Set the set_update_switch method for switches."""
         self.update_switch = func
+
+    async def set_update_thermostat(self, func) -> None:
+        """Set the set_update_thermostat method for thermostats."""
+        self.update_thermostat = func
 
     async def set_async_add_bs_entities(self, func) -> None:
         """Set the async_add_entities method for binary sensors."""
@@ -82,6 +106,21 @@ class AveWebServer:
         """Set the async_add_entities method for switches."""
         if self.async_add_sw_entities is None:
             self.async_add_sw_entities = func
+
+    async def set_async_add_th_entities(self, func) -> None:
+        """Set the async_add_entities method for thermostats."""
+        if self.async_add_th_entities is None:
+            self.async_add_th_entities = func
+
+    async def set_async_add_number_entities(self, func) -> None:
+        """Set the async_add_entities method for number entities."""
+        if self.async_add_number_entities is None:
+            self.async_add_number_entities = func
+
+    async def set_update_th_offset(self, func) -> None:
+        """Set the method to add or update thermostat offset number entities."""
+        if self.update_th_offset is None:
+            self.update_th_offset = func
 
     async def is_connected(self) -> bool:
         """Return if the web server is connected."""
@@ -96,6 +135,7 @@ class AveWebServer:
                 protocols=["binary"],
             )
             self._connected = True
+            self.mac_address = await self.tryget_mac_address()
             _LOGGER.debug("Connected to WebSocket server at %s", self.settings.host)
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Failed to connect to WebSocket server: %s", err)
@@ -105,6 +145,9 @@ class AveWebServer:
     async def disconnect(self) -> None:
         """Disconnect from the web server."""
         self.closed = True
+        if self._thermostat_fetch_task and not self._thermostat_fetch_task.done():
+            self._thermostat_fetch_task.cancel()
+            self._thermostat_fetch_task = None
         if self.ws_conn:
             await self.ws_conn.close()
             self.ws_conn = None
@@ -148,6 +191,7 @@ class AveWebServer:
 
     async def on_connect_actions(self):
         """Actions to perform after connecting to the web server."""
+
         if self.ws_conn is None or self.ws_conn.closed:
             return
         await self.send_ws_command("LDI")  # Get device list
@@ -161,11 +205,58 @@ class AveWebServer:
             await self.send_ws_command("GSF", ["12"])
             await self.send_ws_command("WSF", "12")
 
+        if self.settings.fetch_thermostats:
+            await self._start_thermostats_fetch_flow()
+
         await self.send_ws_command("SU3")  # Start streaming updates (most of them)
         # await self.send_ws_command("SU2") # Starts streaming some other updates (UPD for TLO and XU , NET and CLD messages)
 
+    async def _start_thermostats_fetch_flow(self) -> None:
+        """Start thermostat bootstrap flow without blocking message handling."""
+        self.ave_map = AveMap()
+        self._thermostat_lm_done.clear()
+        self._thermostat_lmc_done.clear()
+
+        if self._thermostat_fetch_task and not self._thermostat_fetch_task.done():
+            self._thermostat_fetch_task.cancel()
+
+        await self.send_ws_command("LM")
+        self._thermostat_fetch_task = asyncio.create_task(self._termostats_fetch_flow())
+
+    async def _termostats_fetch_flow(self):
+        # 1) wait until LM responses are received and the map is loaded
+        try:
+            await asyncio.wait_for(self._thermostat_lm_done.wait(), 15.0)
+        except TimeoutError:
+            _LOGGER.warning(
+                "Timed out waiting for LM responses; skipping thermostat map"
+            )
+            return
+
+        # 2) send LMC for each area once the LM map is loaded
+        if self.ave_map.areas_loaded and self.ws_conn and not self.ws_conn.closed:
+            if not self.ave_map.areas:
+                _LOGGER.debug("LM map returned no areas")
+                return
+            for map_id in self.ave_map.areas:
+                await self.send_ws_command("LMC", map_id)
+        else:
+            _LOGGER.debug("Map not loaded or ws disconnected; skipping LMC send")
+            return
+
+        # 3) wait for all LMC responses (commands loaded)
+        try:
+            await asyncio.wait_for(self._thermostat_lmc_done.wait(), 15.0)
+        except TimeoutError:
+            _LOGGER.warning("Timed out waiting for LMC responses; proceeding")
+
+        # 4) request thermostat status snapshots
+        commands: list[AveMapCommand] = self.ave_map.GetCommandsByFamily(4)
+        for thermostatCommand in commands:
+            await self.send_ws_command("WTS", [int(thermostatCommand.device_id)])
+
     def value_to_hex(self, value):
-        """Return the herawstringalue of a number."""
+        """Return the hexadecimal value of a number."""
         return hex(value)[2:].upper()
 
     async def build_crc(self, rawstring):
@@ -198,17 +289,36 @@ class AveWebServer:
         except Exception as e:  # noqa: BLE001
             _LOGGER.error("Error processing message", exc_info=e)
 
-    async def send_ws_command(self, command, parameters=None):
+    async def send_ws_command(self, command, parameters=None, records=None):
         """Send a command to the web server."""
         message = chr(0x02) + command
-        if parameters:
-            message += chr(0x1D) + chr(0x1D).join(parameters)
+        payload = ""
+        if parameters is not None:
+            payload += chr(0x1D)
+            if isinstance(parameters, (list, tuple)):
+                pieces = [str(item) for item in parameters]
+            else:
+                pieces = str(parameters).split(",")
+            payload += chr(0x1D).join(pieces)
+        if records is not None:
+            if not isinstance(records, (list, tuple)):
+                records = str(records).split(",")
+            for record in records:
+                payload += chr(0x1E)
+                if isinstance(record, (list, tuple)):
+                    record_string = ",".join(str(item) for item in record)
+                else:
+                    record_string = str(record)
+                pieces = record_string.split(",")
+                payload += chr(0x1D).join(pieces)
+        message += payload
         message += chr(0x03)
         crc = await self.build_crc(message)
         full_message = message + crc + chr(0x04)
         if self.ws_conn and not self.ws_conn.closed:
             await self.ws_conn.send_str(full_message)
-            # _LOGGER.debug("Sent command: %s", full_message)
+            escaped_message = full_message.encode("unicode_escape").decode("ascii")
+            _LOGGER.debug("Sent command: %s", escaped_message)
         else:
             _LOGGER.error("WebSocket is not connected")
 
@@ -226,6 +336,12 @@ class AveWebServer:
             self.manage_upd(parameters, records)
         elif command == "ldi":
             self.manage_ldi(parameters, records)
+        elif command == "lm":
+            self.manage_lm(parameters, records)
+        elif command == "lmc":
+            self.manage_lmc(parameters, records)
+        elif command == "wts":
+            self.manage_wts(parameters, records)
         elif command == "cld":
             # cloud commands received from SU2
             pass
@@ -294,24 +410,134 @@ class AveWebServer:
             # ANTITHEFT UNIT (requires SU2)
             _LOGGER.debug("XU Antitheft Unit - engaged", extra={"id": parameters[2]})
         elif parameters[0] == "WT":
-            if parameters[1] == "O":  # THERMOSTAT OFFSET  # noqa: SIM114
-                pass
-            elif parameters[1] == "S":  # THERMOSTAT SEASON # noqa: SIM114
-                pass
-            elif parameters[1] == "T":  # THERMOSTAT TEMPERATURE # noqa: SIM114
-                pass
-            elif parameters[1] == "L":  # DAIKIN FAN LEVEL # noqa: SIM114
-                pass
-            elif parameters[1] == "Z":  # DAIKIN LOCALOFF
-                pass
-        elif (
-            parameters[0] == "TT" or parameters[0] == "TP" or parameters[0] == "TR"
-        ):  # THERMOSTAT TEMPERATURE
-            pass
-        elif (
-            parameters[0] == "TLO" or parameters[0] == "D"
-        ):  # THERMOSTAT LOCAL OFF (requires SU2)
-            pass
+            if parameters[1] == "O":
+                self.update_thermostat(
+                    server=self,
+                    family=4,
+                    ave_device_id=int(parameters[2]),
+                    property_name="offset",
+                    property_value=int(parameters[3]) / 10,
+                )
+                self.update_th_offset(
+                    server=self,
+                    family=4,
+                    ave_device_id=int(parameters[2]),
+                    offset_value=int(parameters[3]) / 10,
+                )
+            elif parameters[1] == "S":  # THERMOSTAT SEASON
+                self.update_thermostat(
+                    server=self,
+                    family=4,
+                    ave_device_id=int(parameters[2]),
+                    property_name="season",
+                    property_value=int(parameters[3]) / 10,
+                )
+            elif parameters[1] == "T":  # THERMOSTAT TEMPERATURE
+                self.update_thermostat(
+                    server=self,
+                    family=4,
+                    ave_device_id=int(parameters[2]),
+                    property_name="temperature",
+                    property_value=int(parameters[3]) / 10,
+                )
+            elif parameters[1] == "L":
+                self.update_thermostat(
+                    server=self,
+                    family=4,
+                    ave_device_id=int(parameters[2]),
+                    property_name="fan_level",
+                    property_value=int(parameters[3]),
+                )
+            elif parameters[1] == "Z":
+                self.update_thermostat(
+                    server=self,
+                    family=4,
+                    ave_device_id=int(parameters[2]),
+                    property_name="local_off",
+                    property_value=int(parameters[3]),
+                )
+        elif parameters[0] == "TM":
+            self.update_thermostat(
+                server=self,
+                family=4,
+                ave_device_id=int(parameters[1]),
+                property_name="mode",
+                property_value=parameters[2],
+            )
+        elif parameters[0] == "TW":
+            self.update_thermostat(
+                server=self,
+                family=4,
+                ave_device_id=int(parameters[1]),
+                property_name="window_state",
+                property_value=int(parameters[2]),
+            )
+        elif parameters[0] == "TP":
+            self.update_thermostat(
+                server=self,
+                family=4,
+                ave_device_id=int(parameters[1]),
+                property_name="set_point",
+                property_value=int(parameters[2]) / 10,
+            )
+        elif parameters[0] in ["TT", "TR", "TL", "TLO", "TO", "TS"]:  # THERMOSTAT
+            if (
+                not self.ave_map
+                or not self.ave_map.areas_loaded
+                or not self.ave_map.command_loaded
+            ):
+                _LOGGER.debug(
+                    "Received thermostat update before map/commands loaded; skipping"
+                )
+                return
+            _command = self.ave_map.GetCommandByIdAndFamily(int(parameters[1]), 4)
+            if not _command:
+                _LOGGER.debug(
+                    "Received thermostat update for unknown command ID %s; skipping",
+                    parameters[1],
+                )
+                return
+
+            if parameters[0] == "TT":
+                self.update_thermostat(
+                    server=self,
+                    family=4,
+                    ave_device_id=_command.device_id,
+                    property_name="temperature",
+                    property_value=int(parameters[2]) / 10,
+                )
+            elif parameters[0] == "TL":
+                self.update_thermostat(
+                    server=self,
+                    family=4,
+                    ave_device_id=_command.device_id,
+                    property_name="fan_level",
+                    property_value=int(parameters[2]),
+                )
+            elif parameters[0] == "TLO":
+                self.update_thermostat(
+                    server=self,
+                    family=4,
+                    ave_device_id=_command.device_id,
+                    property_name="local_off",
+                    property_value=(1 if int(parameters[2]) == 0 else 0),
+                )
+            elif parameters[0] == "TO":
+                self.update_thermostat(
+                    server=self,
+                    family=4,
+                    ave_device_id=_command.device_id,
+                    property_name="offset",
+                    property_value=int(parameters[2]),
+                )
+            elif parameters[0] == "TS":
+                self.update_thermostat(
+                    server=self,
+                    family=4,
+                    ave_device_id=_command.device_id,
+                    property_name="season",
+                    property_value=int(parameters[2]),
+                )
         elif parameters[0] == "GUI":
             # Reload gui
             pass
@@ -378,6 +604,58 @@ class AveWebServer:
                 )
                 continue
 
+    def manage_lm(self, parameters, records):
+        """Manage LM List Map commands received from the web server."""
+        _LOGGER.debug(
+            "Parsing LM (List Map) command",
+            extra={"parameters": parameters, "records": records},
+        )
+        self.ave_map.LoadAreasFromWsRecords(records)
+        self.ave_map.areas_loaded = True
+        self._thermostat_lm_done.set()
+
+    def manage_lmc(self, parameters, records):
+        """Manage LMC List Map Commands commands received from the web server."""
+        _LOGGER.debug(
+            "Parsing LMC (List Map Commands) command, parameters: %s | records: %s",
+            parameters,
+            records,
+        )
+        area_id = int(parameters[0])
+        self.ave_map.LoadAreaCommands(area_id, records)
+        if self.ave_map.command_loaded:
+            self._thermostat_lmc_done.set()
+
+    def manage_wts(self, parameters, records):
+        """Manage WTS command responses received from the web server."""
+        _LOGGER.debug(
+            "Parsing WTS response",
+            extra={"parameters": parameters, "records": records},
+        )
+        device_id = int(parameters[0])
+        thermostatProperties = AveThermostatProperties.from_wts(parameters, records)
+        thermostatProperties.device_name = (
+            f"thermostat_{thermostatProperties.device_name}"
+        )
+        if self.settings.get_entity_names:
+            command = self.ave_map.GetCommandByDeviceIdAndFamily(device_id, 4)
+            if command and command.command_name:
+                thermostatProperties.device_name = command.command_name
+
+        self.update_thermostat(
+            server=self,
+            family=4,
+            ave_device_id=device_id,
+            properties=thermostatProperties,
+        )
+        self.update_th_offset(
+            server=self,
+            family=4,
+            ave_device_id=device_id,
+            offset_value=thermostatProperties.offset,
+            name=thermostatProperties.device_name,
+        )
+
     async def switch_turn_on(self, device_id: int):
         """Turn on the switch."""
         if self.ws_conn and not self.ws_conn.closed:
@@ -399,6 +677,20 @@ class AveWebServer:
         else:
             _LOGGER.error("WebSocket is not connected")
 
+    async def send_thermostat_sts(self, parameters, records):
+        """Send a command to update the thermostat season/temperatures."""
+        if self.ws_conn and not self.ws_conn.closed:
+            await self.send_ws_command("STS", parameters, records)
+        else:
+            _LOGGER.error("WebSocket is not connected")
+
+    async def thermostat_on_off(self, device_id: int, on_off: int):
+        """Send a command to update the thermostat season/temperatures."""
+        if self.ws_conn and not self.ws_conn.closed:
+            await self.send_ws_command("TOO", [str(device_id), str(on_off)])
+        else:
+            _LOGGER.error("WebSocket is not connected")
+
     async def call_bridge(self, command: str) -> tuple[int, str | None]:
         """Call a xml "rest" bridge for common commands."""
         async with aiohttp.ClientSession() as session:
@@ -415,6 +707,38 @@ class AveWebServer:
             except Exception as err:  # noqa: BLE001
                 _LOGGER.error("Error calling bridge: %s", err)
                 return 900, None
+
+    async def tryget_mac_address(self) -> str | None:
+        async with aiohttp.ClientSession() as session:
+            try:
+                url = f"http://{self.settings.host}/revealcode.php"
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        data = await response.text()
+                        _LOGGER.debug("revealcode response: %s", data)
+
+                        try:
+                            root = ET.fromstring(data)
+                            xml_mac = root.findtext("macaddress")
+                            if xml_mac:
+                                return xml_mac.strip().lower()
+                        except ET.ParseError as err:
+                            _LOGGER.error(
+                                "Invalid XML in revealcode response: %s",
+                                err,
+                            )
+                        _LOGGER.warning(
+                            "No macaddress tag found in revealcode response"
+                        )
+                        return None
+                    _LOGGER.error(
+                        "Failed to get WebServer MAC address. Status: %s",
+                        response.status,
+                    )
+                    return None
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.error("Error getting WebServer MAC ADDRESS: %s", err)
+                return None
 
     async def get_device_list_bridge(self) -> tuple[int, str | None]:
         """Get the device list from the bridge."""

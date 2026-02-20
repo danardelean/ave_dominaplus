@@ -79,9 +79,11 @@ async def adopt_existing_sensors(server: AveWebServer, entry: ConfigEntry) -> No
         # raise ConfigEntryNotReady("Error adopting existing sensors") from e
 
 
-def set_sensor_uid(family, ave_device_id):
+def set_sensor_uid(webserver: AveWebServer, family, ave_device_id):
     """Set the unique ID for the sensor."""
-    return f"ave_switch_{family}_{ave_device_id}"  # Unique ID for the sensor
+    # TODO: This will ready up for multi-hub configurations but breack existing installations
+    # return f"ave_{webserver.mac_address}_switch_{family}_{ave_device_id}"  # Unique ID for the sensor
+    return f"ave_switch_{family}_{ave_device_id}"
 
 
 def update_switch(
@@ -101,7 +103,7 @@ def update_switch(
 
     _LOGGER.debug(" Updating switch for family %s, device_id %s", family, ave_device_id)
 
-    unique_id = set_sensor_uid(family, ave_device_id)
+    unique_id = set_sensor_uid(server, family, ave_device_id)
     already_exists = unique_id in server.switches
     if already_exists:
         # Update the existing sensor's state
@@ -113,7 +115,7 @@ def update_switch(
             if not check_name_changed(server.hass, unique_id):
                 switch.set_name(name)
     else:
-        # Create a new motion detection sensor
+        # Create a new switch sensor
         entity_name = None
         entity_ave_name = None
         if name is not None and server.settings.get_entity_names:

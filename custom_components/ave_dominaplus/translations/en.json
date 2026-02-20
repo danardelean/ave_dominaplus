@@ -5,9 +5,6 @@
         "title": "Add AVE dominaplus",
         "description": "Set a connection to the AVE dominaplus webserver.",
         "data": {
-          "host": "[%key:common::config_flow::data::host%]",
-          "username": "[%key:common::config_flow::data::username%]",
-          "password": "[%key:common::config_flow::data::password%]",
           "ip_address": "Webserver IP address",
           "get_entities_names": "Get entities names from webserver",
           "fetch_sensor_areas": "Get antitheft sensor areas",
@@ -25,9 +22,6 @@
         "title": "Reconfigure AVE dominaplus",
         "description": "Change the settings of the AVE dominaplus integration.",
         "data": {
-          "host": "[%key:common::config_flow::data::host%]",
-          "username": "[%key:common::config_flow::data::username%]",
-          "password": "[%key:common::config_flow::data::password%]",
           "ip_address": "Webserver IP address",
           "get_entities_names": "Get entities names from webserver",
           "fetch_sensor_areas": "Get antitheft sensor areas",
@@ -43,9 +37,9 @@
       }
     },
     "error": {
-      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-      "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
-      "unknown": "[%key:common::config_flow::error::unknown%]"
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid authentication",
+      "unknown": "Unknown error"
     },
     "abort": {
       "already_configured": "Device is already configured"

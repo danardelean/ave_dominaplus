@@ -13,7 +13,12 @@ from homeassistant.helpers.typing import ConfigType
 from .const import DOMAIN
 from .web_server import AveWebServer
 
-PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SWITCH]
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.CLIMATE,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)

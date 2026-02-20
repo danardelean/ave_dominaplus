@@ -43,16 +43,45 @@ Control your AVE Dominaplus home automation system directly from Home Assistant!
    names after discovery.
 - These sensors are sensitive and may trigger quickly; configure accordingly.
 
+### ✅ Thermostats
+- **Supported** when **"Get thermostats"** is enabled in the config flow.
+- For each thermostat the integration creates two entities:
+  * a **climate** entity (`AveThermostat`) representing the controller
+  * a **number** entity showing the current temperature offset of the device (–5 °C..+5 °C)
+
+#### Climate entity behaviour
+- `Mode` controls the combination of season and on/off state:
+  * `Cool` for summer mode
+  * `Heat` for winter mode
+  * `Off` if the thermostat is powered off (support depends on the device)
+- `Preset` is either `Schedule` (follow the schedule on the webserver)
+  or `Manual` (immediate changes from Home Assistant). Changing the
+  target temperature from HA will automatically switch the preset to
+  `Manual`, mimicking the vendor app behaviour.
+- `Fan mode` reflects the fancoil speed reported by the zone; it is **read‑only**.
+
+#### Offset sensor
+- A read‑only number sensor is created for each thermostat exposing the
+  device’s current offset.
+- The offset **cannot be modified from Home Assistant**; it must be set on the
+  physical thermostat itself.  The sensor simply mirrors the value reported
+  by the device.
+
+#### Naming
+Entity names are obtained from the webserver when the
+"Get entities names from webserver" option is enabled.  Otherwise
+generated names based on family and device ID are used.
 ---
 
 ## 🔜 Not yet supported (contributors welcome!)
 
 Other devices are not yet supported either for lack of time or lack of devices at hand
 
-- **Thermostats**: Backend discovery is ready; no entity is exposed
+- **Dimmers**: Work in progress
 - **Scenarios**: Backend discovery is ready; no entity is exposed
 - **Areas**: Feel free to come with a plan to add AVE areas and device area assignments without clashing with the HA areas
 - **Economizers**: Not yet supported
+- **Shutters**: Not yet supported
 
 ---
 

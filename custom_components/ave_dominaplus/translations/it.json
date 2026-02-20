@@ -1,0 +1,48 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Aggiungi AVE dominaplus",
+        "description": "Configura una connessione al webserver AVE dominaplus.",
+        "data": {
+          "ip_address": "Indirizzo IP del webserver",
+          "get_entities_names": "Usa i nomi entità dal webserver",
+          "fetch_sensor_areas": "Importa le aree antifurto",
+          "fetch_sensors": "Importa i sensori antifurto individuali",
+          "fetch_lights": "Importa le luci",
+          "fetch_thermostats": "Importa i termostati"
+        },
+        "data_description": {
+          "ip_address": "Il webserver deve essere raggiungibile dall'istanza Home Assistant.",
+          "get_entities_names": "Usa nomi e identificativi entità configurati nel sistema Domina Plus.",
+          "fetch_sensors": "Vengono scoperti al primo evento rilevato. In impianti grandi può creare molte entità."
+        }
+      },
+      "reconfigure": {
+        "title": "Riconfigura AVE dominaplus",
+        "description": "Modifica le impostazioni dell'integrazione AVE dominaplus.",
+        "data": {
+          "ip_address": "Indirizzo IP del webserver",
+          "get_entities_names": "Usa i nomi entità dal webserver",
+          "fetch_sensor_areas": "Importa le aree antifurto",
+          "fetch_sensors": "Importa i sensori antifurto individuali",
+          "fetch_lights": "Importa le luci",
+          "fetch_thermostats": "Importa i termostati"
+        },
+        "data_description": {
+          "ip_address": "Il webserver deve essere raggiungibile dall'istanza Home Assistant.",
+          "get_entities_names": "Usa nomi e identificativi entità configurati nel sistema Domina Plus.",
+          "fetch_sensors": "Vengono scoperti al primo evento rilevato. In impianti grandi può creare molte entità."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Connessione non riuscita",
+      "invalid_auth": "Autenticazione non valida",
+      "unknown": "Errore sconosciuto"
+    },
+    "abort": {
+      "already_configured": "Dispositivo già configurato"
+    }
+  }
+}
