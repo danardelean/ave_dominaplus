@@ -10,11 +10,12 @@
           "get_entities_names": "Get entities names from webserver",
           "fetch_sensor_areas": "Get antitheft sensor areas",
           "fetch_sensors": "Get individual antitheft sensors",
-          "fetch_lights": "Get lights"
+          "fetch_lights": "Get lights",
+          "fetch_thermostats": "Get thermostats"
         },
         "data_description": {
           "ip_address": "The webserver must be reachable from the Home Assistant instance.",
-          "get_entities_names": "Will use the entities names and IDs as set in the domina plus system. You may want to it off whn you want to change them",
+          "get_entities_names": "Will use the entities names and IDs as set in the domina plus system.",
           "fetch_sensors": "Will be discovered at the first event they fire. May create many entries in big systems"
         },
         "description": "Set a connection to the AVE dominaplus webserver.",
@@ -29,11 +30,12 @@
           "get_entities_names": "Get entities names from webserver",
           "fetch_sensor_areas": "Get antitheft sensor areas",
           "fetch_sensors": "Get individual antitheft sensors",
-          "fetch_lights": "Get lights"
+          "fetch_lights": "Get lights",
+          "fetch_thermostats": "Get thermostats"
         },
         "data_description": {
           "ip_address": "The webserver must be reachable from the Home Assistant instance.",
-          "get_entities_names": "Will use the entities names and IDs as set in the domina plus system. You may want to it off whn you want to change them",
+          "get_entities_names": "Will use the entities names and IDs as set in the domina plus system.",
           "fetch_sensors": "Will be discovered at the first event they fire. May create many entries in big systems"
         },
         "description": "Change the settings of the AVE dominaplus integration.",
