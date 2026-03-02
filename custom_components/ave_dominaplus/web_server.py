@@ -210,7 +210,7 @@ class AveWebServer:
             await self._start_thermostats_fetch_flow()
 
         await self.send_ws_command("SU3")  # Start streaming updates (most of them)
-        # await self.send_ws_command("SU2") # Starts streaming some other updates (UPD for TLO and XU , NET and CLD messages)
+        await self.send_ws_command("SU2")  # Starts streaming TLO, XU, NET, CLD updates
 
     async def _start_thermostats_fetch_flow(self) -> None:
         """Start thermostat bootstrap flow without blocking message handling."""
