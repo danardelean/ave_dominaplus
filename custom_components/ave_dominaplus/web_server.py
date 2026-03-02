@@ -16,6 +16,7 @@ from .ave_map import AveMap, AveMapCommand
 from .ave_thermostat import AveThermostatProperties
 
 _LOGGER = logging.getLogger(__name__)
+_WS_LOGGER = _LOGGER
 
 
 class AveWebServerSettings:
@@ -271,7 +272,7 @@ class AveWebServer:
 
     async def on_message(self, message):
         """Handle incoming messages from the web server."""
-        # _LOGGER.debug("Received message: %s", message)
+        _WS_LOGGER.debug("WS RX RAW <<< %s", message[:500])
         try:
             # Ensure the message is decoded if it's in bytes
             if isinstance(message, bytes):
@@ -316,17 +317,20 @@ class AveWebServer:
         crc = await self.build_crc(message)
         full_message = message + crc + chr(0x04)
         if self.ws_conn and not self.ws_conn.closed:
+            _WS_LOGGER.info(
+                "WS TX >>> %s params=%s records=%s", command, parameters, records
+            )
             await self.ws_conn.send_str(full_message)
             escaped_message = full_message.encode("unicode_escape").decode("ascii")
-            escaped_message = (
-                full_message.encode("unicode_escape").decode("ascii")
-            )
-            _LOGGER.debug("Sent command: %s", escaped_message)
+            _WS_LOGGER.debug("WS TX RAW >>> %s", escaped_message)
         else:
             _LOGGER.error("WebSocket is not connected")
 
     async def manage_commands(self, command, parameters, records):
         """Manage commands received from the web server."""
+        _WS_LOGGER.info(
+            "WS RX <<< %s params=%s records=%s", command, parameters, records
+        )
         if command == "pong":
             pass
         elif command == "ack":
@@ -433,7 +437,7 @@ class AveWebServer:
                     family=4,
                     ave_device_id=int(parameters[2]),
                     property_name="season",
-                    property_value=int(parameters[3]) / 10,
+                    property_value=int(parameters[3]),
                 )
             elif parameters[1] == "T":  # THERMOSTAT TEMPERATURE
                 self.update_thermostat(

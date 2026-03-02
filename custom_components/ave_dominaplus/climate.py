@@ -238,7 +238,9 @@ class AveThermostat(ClimateEntity):
         else:
             self._attr_preset_mode = PRESET_SCHEDULE
 
-        if str(self.ave_properties.season) == "0":
+        if int(self.ave_properties.local_off) == 1:
+            self._attr_hvac_mode = HVACMode.OFF
+        elif self.ave_properties.season == 0:
             self._attr_hvac_mode = HVACMode.COOL
         else:
             self._attr_hvac_mode = HVACMode.HEAT
@@ -269,10 +271,15 @@ class AveThermostat(ClimateEntity):
             _fan_level: int = int(value) if value is not None else -1
             self.update_from_fan_level(_fan_level)
         elif property_name == "local_off":
-            self._attr_hvac_mode = (
-                HVACMode.OFF if value == "1" else self._attr_hvac_mode
-            )
-            self.ave_properties.local_off = value
+            self.ave_properties.local_off = int(value)
+            if int(value) == 1:
+                self._attr_hvac_mode = HVACMode.OFF
+            else:
+                # Restored from off — set mode based on current season
+                if self.ave_properties.season == 0:
+                    self._attr_hvac_mode = HVACMode.COOL
+                else:
+                    self._attr_hvac_mode = HVACMode.HEAT
         elif property_name == "offset":
             self.ave_properties.offset = value
             pass  # Offset is not directly represented in Home Assistant's climate entity model
@@ -311,13 +318,8 @@ class AveThermostat(ClimateEntity):
 
     async def async_set_temperature(self, **kwargs):
         """Set new target temperature."""
-        season = None
-        season = (
-            self.ave_properties.season
-            if self.ave_properties.season and self.ave_properties != ""
-            else None
-        )
-        if season is None:
+        season = self.ave_properties.season
+        if season is None or season < 0:
             _LOGGER.error(
                 "Cannot set temperature: season is not defined for device_id %s",
                 self.ave_properties.device_id,
@@ -339,13 +341,8 @@ class AveThermostat(ClimateEntity):
 
     async def async_set_preset_mode(self, preset_mode):
         """Set new target preset mode."""
-        season = None
-        season = (
-            self.ave_properties.season
-            if self.ave_properties.season and self.ave_properties != ""
-            else None
-        )
-        if season is None:
+        season = self.ave_properties.season
+        if season is None or season < 0:
             _LOGGER.error(
                 "Cannot set preset mode: season is not defined for device_id %s",
                 self.ave_properties.device_id,
@@ -377,9 +374,17 @@ class AveThermostat(ClimateEntity):
 
     async def async_turn_on(self):
         """Turn the entity on."""
-        await self._webserver.thermostat_on_off(
-            device_id=self.ave_properties.device_id, on_off=1
-        )
+        season = self.ave_properties.season
+        if season is None or season < 0:
+            season = 1  # Default to heating if season is unknown
+        parameters = [str(self.ave_properties.device_id)]
+        _mode = 1 if self._attr_preset_mode == PRESET_MANUAL else 0
+        temp = self._attr_target_temperature or 20.0
+        records = [[season, _mode, int(temp * 10)]]
+        if self._webserver:
+            await self._webserver.send_thermostat_sts(
+                parameters=parameters, records=records
+            )
 
     async def async_turn_off(self):
         """Turn the entity off."""
