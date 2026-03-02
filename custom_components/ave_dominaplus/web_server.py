@@ -75,6 +75,9 @@ class AveWebServer:
         self.switches: dict = {}  # Track switches by unique ID
         self.async_add_sw_entities: Any = None
         self.update_switch: Any = None
+        self.lights: dict = {}  # Track light (dimmer) entities by unique ID
+        self.async_add_light_entities: Any = None
+        self.update_light: Any = None
         self.thermostats: dict[Any] = {}  # Track thermostats by ID
         self.async_add_th_entities: Any = None
         self.update_thermostat: Any = None
@@ -94,6 +97,10 @@ class AveWebServer:
         """Set the set_update_switch method for switches."""
         self.update_switch = func
 
+    async def set_update_light(self, func) -> None:
+        """Set the update_light method for lights (dimmers)."""
+        self.update_light = func
+
     async def set_update_thermostat(self, func) -> None:
         """Set the set_update_thermostat method for thermostats."""
         self.update_thermostat = func
@@ -107,6 +114,11 @@ class AveWebServer:
         """Set the async_add_entities method for switches."""
         if self.async_add_sw_entities is None:
             self.async_add_sw_entities = func
+
+    async def set_async_add_light_entities(self, func) -> None:
+        """Set the async_add_entities method for lights (dimmers)."""
+        if self.async_add_light_entities is None:
+            self.async_add_light_entities = func
 
     async def set_async_add_th_entities(self, func) -> None:
         """Set the async_add_entities method for thermostats."""
@@ -198,8 +210,10 @@ class AveWebServer:
         await self.send_ws_command("LDI")  # Get device list
 
         if self.settings.fetch_lights:
-            # Get status by family type 1 (lights)
+            # Get status by family type 1 (lights/switches)
             await self.send_ws_command("GSF", "1")
+            # Get status by family type 2 (dimmers)
+            await self.send_ws_command("GSF", "2")
 
         # Get status by family type 12 (motion detection areas)
         if self.settings.fetch_sensor_areas:
@@ -387,6 +401,8 @@ class AveWebServer:
                 pass
             elif device_type == 1 and self.settings.fetch_lights:
                 self.update_switch(self, device_type, device_id, device_status, None)
+            elif device_type == 2 and self.settings.fetch_lights:
+                self.update_light(self, device_type, device_id, device_status, None)
             # if device_type in [12, 13]:
             #     log_with_timestamp(f"Received async Antitheft status update. Device ID: {device_id}, Device Type: {device_type}, Status: {device_status}")
             # else:
@@ -573,7 +589,11 @@ class AveWebServer:
             for record in records:
                 device_id, device_status = int(record[0]), int(record[1])
                 self.update_switch(self, 1, device_id, device_status, None)
-                # send_mqtt_message(device_id, device_status)
+
+        if parameters[0] == "2":
+            for record in records:
+                device_id, device_status = int(record[0]), int(record[1])
+                self.update_light(self, 2, device_id, device_status, None)
 
     def manage_ldi(self, parameters, records):
         """Manage LDI List Devices commands received from the web server."""
@@ -595,7 +615,9 @@ class AveWebServer:
                 pass
             elif device_type == 1:
                 self.update_switch(self, 1, device_id, -1, device_name)
-                # Light
+            elif device_type == 2:
+                # Dimmer
+                self.update_light(self, 2, device_id, -1, device_name)
             elif device_type == 4:
                 # Thermostat
                 pass
@@ -683,6 +705,39 @@ class AveWebServer:
             await self.send_ws_command("EBI", [str(device_id), "10"])
         else:
             _LOGGER.error("WebSocket is not connected")
+
+    def _get_command_id_for_device(self, device_id: int, family: int) -> int | None:
+        """Look up the command_id from the map for a device."""
+        command = self.ave_map.GetCommandByDeviceIdAndFamily(device_id, family)
+        if command:
+            return command.command_id
+        return None
+
+    async def light_turn_on(self, device_id: int, brightness: int | None = None):
+        """Turn on the light (dimmer) using SIL command only.
+
+        SIL both turns on and sets brightness. Using EBI+SIL together causes
+        a race condition where EBI restores the stored brightness after SIL.
+        SIL uses record separator (0x1E) between device_id and brightness.
+        """
+        if not (self.ws_conn and not self.ws_conn.closed):
+            _LOGGER.error("WebSocket is not connected")
+            return
+        if brightness is not None:
+            await self.send_ws_command(
+                "SIL", [str(device_id)], records=[str(brightness)]
+            )
+        else:
+            await self.send_ws_command(
+                "SIL", [str(device_id)], records=["31"]
+            )
+
+    async def light_turn_off(self, device_id: int):
+        """Turn off the light (dimmer). EBI [device_id, 2] toggles off."""
+        if not (self.ws_conn and not self.ws_conn.closed):
+            _LOGGER.error("WebSocket is not connected")
+            return
+        await self.send_ws_command("EBI", [str(device_id), "2"])
 
     async def send_thermostat_sts(self, parameters, records):
         """Send a command to update the thermostat season/temperatures."""
