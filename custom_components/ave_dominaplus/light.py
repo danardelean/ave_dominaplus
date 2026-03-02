@@ -167,6 +167,7 @@ class AveDimmerLight(LightEntity):
         self.family = family
         self._webserver = webserver
         self._ave_name = ave_name
+        self._last_brightness: int = 255  # Last non-zero brightness for restore
         if self._webserver:
             self.hass = self._webserver.hass
 
@@ -175,6 +176,7 @@ class AveDimmerLight(LightEntity):
             self._attr_is_on = device_status > 0
             if device_status > 0:
                 self._attr_brightness = self._ave_to_ha_brightness(device_status)
+                self._last_brightness = self._attr_brightness
             else:
                 self._attr_brightness = 0
 
@@ -193,13 +195,10 @@ class AveDimmerLight(LightEntity):
             ave_brightness = self._ha_to_ave_brightness(brightness)
             await self._webserver.light_turn_on(self.ave_device_id, ave_brightness)
             self._attr_brightness = brightness
+            self._last_brightness = brightness
         else:
-            # Restore last known brightness, or full if unknown
-            if self._attr_brightness and self._attr_brightness > 0:
-                ave_brightness = self._ha_to_ave_brightness(self._attr_brightness)
-            else:
-                ave_brightness = 31
-                self._attr_brightness = 255
+            # Restore last known non-zero brightness
+            ave_brightness = self._ha_to_ave_brightness(self._last_brightness)
             await self._webserver.light_turn_on(self.ave_device_id, ave_brightness)
         self._attr_is_on = True
         self.async_write_ha_state()
@@ -251,6 +250,7 @@ class AveDimmerLight(LightEntity):
         self._attr_is_on = device_status > 0
         if device_status > 0:
             self._attr_brightness = self._ave_to_ha_brightness(device_status)
+            self._last_brightness = self._attr_brightness
         else:
             self._attr_brightness = 0
         self.async_write_ha_state()
