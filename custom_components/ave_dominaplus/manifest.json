@@ -6,6 +6,6 @@
   "documentation": "https://github.com/emmeoerre/ave_dominaplus",
   "integration_type": "hub",
   "iot_class": "local_push",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "issue_tracker": "https://github.com/emmeoerre/ave_dominaplus/issues"
 }
