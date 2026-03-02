@@ -364,9 +364,6 @@ class AveThermostat(ClimateEntity):
             await self._webserver.thermostat_on_off(
                 device_id=self.ave_properties.device_id, on_off=0
             )
-            self.ave_properties.local_off = 1
-            self._attr_hvac_mode = HVACMode.OFF
-            self.async_write_ha_state()
         elif hvac_mode in {HVACMode.HEAT, HVACMode.COOL}:
             season = 1 if hvac_mode == HVACMode.HEAT else 0
             parameters = [str(self.ave_properties.device_id)]
@@ -381,10 +378,6 @@ class AveThermostat(ClimateEntity):
                 await self._webserver.send_thermostat_sts(
                     parameters=parameters, records=records
                 )
-            self.ave_properties.local_off = 0
-            self.ave_properties.season = season
-            self._attr_hvac_mode = hvac_mode
-            self.async_write_ha_state()
 
     async def async_turn_on(self):
         """Turn the entity on."""
@@ -404,18 +397,12 @@ class AveThermostat(ClimateEntity):
             await self._webserver.send_thermostat_sts(
                 parameters=parameters, records=records
             )
-        self.ave_properties.local_off = 0
-        self._attr_hvac_mode = HVACMode.HEAT if season == 1 else HVACMode.COOL
-        self.async_write_ha_state()
 
     async def async_turn_off(self):
         """Turn the entity off."""
         await self._webserver.thermostat_on_off(
             device_id=self.ave_properties.device_id, on_off=0
         )
-        self.ave_properties.local_off = 1
-        self._attr_hvac_mode = HVACMode.OFF
-        self.async_write_ha_state()
 
     @property
     def unique_id(self) -> str:
